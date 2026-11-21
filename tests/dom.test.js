@@ -318,6 +318,47 @@ async function main() {
   assert.strictEqual(state.logs[today].length, beforeAIAdd + 2, '应一次添加两项');
   ok('复核识别结果并批量入账');
 
+  // ---------- 食物库导出 / 导入 ----------
+  doc.querySelector('.tab-item[data-tab="me"]').click();
+  await sleep(150);
+  doc.querySelector('[data-act="manage-foods"]').click();
+  await sleep(150);
+  assert.ok(doc.querySelector('[data-act="export-foods"]'), '应有导出食物库按钮');
+  assert.ok(doc.querySelector('[data-act="import-foods"]'), '应有导入食物库按钮');
+  const pack = window.QK.buildFoodPack();
+  assert.strictEqual(pack.type, 'qingka-food-pack');
+  assert.ok(pack.items.length >= 2, '包内应包含自定义食物');
+  assert.ok(pack.items.some((i) => i.barcode), '包内应保留条码');
+  const again = window.QK.mergeFoodPack(pack);
+  assert.strictEqual(again.added, 0, '重复导入不应新增');
+  assert.strictEqual(again.skipped, pack.items.length);
+  const addOne = window.QK.mergeFoodPack({
+    items: [{ name: '导入测试食物', per100: { kcal: 88, carb: 10, protein: 5, fat: 2 } }]
+  });
+  assert.strictEqual(addOne.added, 1, '应导入一条新食物');
+  assert.strictEqual(window.QK.state().customFoods.length, pack.items.length + 1);
+  doc.querySelector('[data-act="close-sheet"]').click();
+  await sleep(100);
+  ok('食物库可导出为条码包并合并导入');
+
+  // ---------- 内置新西兰条码包 ----------
+  assert.ok(window.NZ_PACK && window.NZ_PACK.items.length >= 1000, '应加载新西兰条码包');
+  const packItem = window.NZ_PACK.items[0];
+  doc.querySelector('.tab-item[data-tab="home"]').click();
+  await sleep(150);
+  doc.querySelector('#view [data-act=open-add]').click();
+  await sleep(150);
+  doc.querySelector('.seg-tabs [data-tab="scan"]').click();
+  await sleep(150);
+  const barcodeForm2 = doc.querySelector('form[data-form="barcode"]');
+  barcodeForm2.querySelector('[name="code"]').value = packItem[0];
+  submit(window, barcodeForm2);
+  const packName = await waitFor(() => doc.querySelector('#sheet .portion-name'), 3000);
+  assert.strictEqual(text(packName), packItem[1]);
+  doc.querySelector('[data-act="close-sheet"]').click();
+  await sleep(100);
+  ok('扫码优先命中内置新西兰条码包');
+
   // ---------- 首次使用：引导页 ----------
   const dom2 = await JSDOM.fromURL('http://127.0.0.1:8123/?nosw=1', {
     runScripts: 'dangerously',

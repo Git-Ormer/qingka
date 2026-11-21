@@ -99,6 +99,37 @@
 
   function unitOf(food) { return food.unit === 'ml' ? 'ml' : 'g'; }
 
+  /* ---------------- 内置条码包（新西兰等） ---------------- */
+
+  var PACK_INDEX = null;
+
+  function packIndex() {
+    if (PACK_INDEX) return PACK_INDEX;
+    PACK_INDEX = {};
+    var pack = window.NZ_PACK;
+    if (pack && Array.isArray(pack.items)) {
+      pack.items.forEach(function (it) {
+        if (it && it[0]) PACK_INDEX[it[0]] = it;
+      });
+    }
+    return PACK_INDEX;
+  }
+
+  function packFood(item) {
+    return {
+      name: item[1],
+      brand: item[2] || '',
+      per100: { kcal: item[3], carb: item[4], protein: item[5], fat: item[6] },
+      unit: item[7] === 'ml' ? 'ml' : 'g',
+      barcode: item[0],
+      source: 'nz-pack'
+    };
+  }
+
+  function packByCode(code) {
+    return packIndex()[code] || null;
+  }
+
   function toFood(c) {
     return {
       name: c.name,
@@ -745,6 +776,18 @@
       out.push({ kind: 'local', id: item.id, food: window.asFood(item), tag: item.cat });
     });
 
+    if (q && window.NZ_PACK && Array.isArray(window.NZ_PACK.items) && (cat === '全部' || cat === '新西兰')) {
+      var packHits = 0;
+      for (var i = 0; i < window.NZ_PACK.items.length && packHits < 10; i++) {
+        var it = window.NZ_PACK.items[i];
+        if (!matches(it[1] + ' ' + (it[2] || ''), q)) continue;
+        if (seenNames[it[1]]) continue;
+        out.push({ kind: 'pack', id: it[0], food: packFood(it), tag: 'NZ包装' });
+        seenNames[it[1]] = 1;
+        packHits++;
+      }
+    }
+
     if (q && cat === '全部') {
       App.recent.forEach(function (f, i) {
         if (!matches(f.name + ' ' + (f.brand || ''), q)) return;
@@ -794,6 +837,9 @@
       if (c) food = toFood(c);
     } else if (kind === 'recent') {
       food = App.recent[Number(id)];
+    } else if (kind === 'pack') {
+      var packedItem = packByCode(id);
+      if (packedItem) food = packFood(packedItem);
     }
     if (food) openPortion(food, App.addMeal, { fromAdd: true });
   }
@@ -1069,6 +1115,12 @@
     var custom = state.customFoods.filter(function (c) { return c.barcode === code; })[0];
     if (custom) {
       openPortion(toFood(custom), App.addMeal, { fromAdd: true, barcode: code });
+      return;
+    }
+
+    var packed = packByCode(code);
+    if (packed) {
+      openPortion(packFood(packed), App.addMeal, { fromAdd: true, barcode: code });
       return;
     }
 
@@ -1446,15 +1498,7 @@
   }
 
   function exportData() {
-    var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'qingka-backup-' + Store.dateKey() + '.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    downloadJSON(state, 'qingka-backup-' + Store.dateKey() + '.json');
     U.toast('备份已导出');
   }
 
@@ -1498,10 +1542,143 @@
     U.openSheet(
       '<div class="sheet-head"><div class="sheet-title">我的食物库</div>' +
       '<button type="button" class="icon-btn" data-act="close-sheet" aria-label="关闭">' + U.ICONS.close + '</button></div>' +
+      '<div class="btn-row" style="margin-bottom:8px">' +
+        '<button type="button" class="btn ghost" data-act="export-foods">导出食物库</button>' +
+        '<button type="button" class="btn ghost" data-act="import-foods">导入食物库</button>' +
+      '</div>' +
+      '<p class="fine">导出为 JSON，可换手机迁移或分享给朋友；导入会与现有食物合并，不覆盖。</p>' +
+      '<input type="file" id="food-pack-input" accept="application/json,.json" class="sr-only">' +
       '<div class="food-list">' + list + '</div>' +
-      '<p class="fine">删除后不会影响已经记录的饮食。</p>',
+      '<p class="fine">' +
+        (window.NZ_PACK && Array.isArray(window.NZ_PACK.items)
+          ? '新西兰包装数据来自 Open Food Facts（ODbL），共 ' + window.NZ_PACK.items.length + ' 条。'
+          : '') +
+        '删除后不会影响已经记录的饮食。</p>',
       'sheet-tall'
     );
+  }
+
+  function buildFoodPack() {
+    return {
+      type: 'qingka-food-pack',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      count: state.customFoods.length,
+      items: state.customFoods.map(function (c) {
+        return {
+          name: c.name,
+          brand: c.brand || '',
+          per100: { kcal: c.per100.kcal, carb: c.per100.carb, protein: c.per100.protein, fat: c.per100.fat },
+          unit: c.unit || 'g',
+          portion: c.portion || null,
+          barcode: c.barcode || ''
+        };
+      })
+    };
+  }
+
+  function normalizePackFoods(data) {
+    var raw = Array.isArray(data) ? data : (data && (data.items || data.foods));
+    if (!Array.isArray(raw)) return [];
+    var out = [];
+    raw.slice(0, 3000).forEach(function (it) {
+      if (!it || typeof it !== 'object') return;
+      var name = String(it.name || '').trim().slice(0, 60);
+      if (!name) return;
+      var p = it.per100 && typeof it.per100 === 'object' ? it.per100 : it;
+      var kcal = Number(p.kcal);
+      if (!isFinite(kcal) || kcal < 0 || kcal > 1000) return;
+      var carb = Number(p.carb);
+      var protein = Number(p.protein);
+      var fat = Number(p.fat);
+      if (!isFinite(carb) || carb < 0) carb = 0;
+      if (!isFinite(protein) || protein < 0) protein = 0;
+      if (!isFinite(fat) || fat < 0) fat = 0;
+      var portion = null;
+      if (it.portion && Number(it.portion.grams) > 0) {
+        portion = {
+          label: String(it.portion.label || '').slice(0, 12),
+          grams: Math.round(Number(it.portion.grams))
+        };
+        if (!portion.label) portion.label = portion.grams + 'g';
+      }
+      out.push({
+        name: name,
+        brand: String(it.brand || '').slice(0, 40),
+        per100: {
+          kcal: Math.round(kcal),
+          carb: N.round(carb, 1),
+          protein: N.round(protein, 1),
+          fat: N.round(fat, 1)
+        },
+        unit: it.unit === 'ml' ? 'ml' : 'g',
+        portion: portion,
+        barcode: String(it.barcode || '').replace(/[^\d]/g, '').slice(0, 14)
+      });
+    });
+    return out;
+  }
+
+  function mergeFoodPack(data) {
+    var items = normalizePackFoods(data);
+    var added = 0;
+    var skipped = 0;
+    items.forEach(function (it) {
+      var dup = state.customFoods.some(function (c) {
+        if (it.barcode && c.barcode) return it.barcode === c.barcode;
+        return c.name === it.name && Math.round(c.per100.kcal) === Math.round(it.per100.kcal);
+      });
+      if (dup) { skipped++; return; }
+      state.customFoods.push({
+        id: uid(),
+        name: it.name,
+        brand: it.brand,
+        per100: it.per100,
+        portion: it.portion,
+        unit: it.unit,
+        barcode: it.barcode
+      });
+      added++;
+    });
+    if (added) persist();
+    return { added: added, skipped: skipped, total: items.length };
+  }
+
+  function exportFoodPack() {
+    if (!state.customFoods.length) { U.toast('食物库还是空的'); return; }
+    downloadJSON(buildFoodPack(), 'qingka-foods-' + Store.dateKey() + '.json');
+    U.toast('已导出 ' + state.customFoods.length + ' 项食物');
+  }
+
+  function importFoodPack(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var data = JSON.parse(String(reader.result));
+        var r = mergeFoodPack(data);
+        if (r.added) U.toast('已导入 ' + r.added + ' 项食物' + (r.skipped ? '，跳过 ' + r.skipped + ' 项重复' : ''));
+        else if (r.skipped) U.toast('这些食物已经在库里了');
+        else U.toast('文件里没有可导入的食物');
+        showFoodLibrary();
+        render();
+      } catch (e) {
+        U.toast('文件格式不正确');
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function downloadJSON(data, filename) {
+    var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
   /* ---------------- 事件绑定 ---------------- */
@@ -1619,6 +1796,11 @@
       if (body) body.innerHTML = manualBodyHTML();
     },
     'manage-foods': function () { showFoodLibrary(); },
+    'export-foods': function () { exportFoodPack(); },
+    'import-foods': function () {
+      var input = document.getElementById('food-pack-input');
+      if (input) input.click();
+    },
     'del-custom': function (el) {
       var id = el.getAttribute('data-id');
       state.customFoods = state.customFoods.filter(function (c) { return c.id !== id; });
@@ -1717,6 +1899,12 @@
 
   function onChange(e) {
     var t = e.target;
+    if (t.id === 'food-pack-input') {
+      var packFile = t.files && t.files[0];
+      t.value = '';
+      if (packFile) importFoodPack(packFile);
+      return;
+    }
     if (t.id === 'ai-photo-input') {
       var aiFile = t.files && t.files[0];
       t.value = '';
@@ -1828,6 +2016,8 @@
     state: function () { return state; },
     render: render,
     openAdd: openAdd,
+    buildFoodPack: buildFoodPack,
+    mergeFoodPack: mergeFoodPack,
     showAIReview: function (items, note) {
       App.ai.items = items || [];
       App.ai.note = note || '';
