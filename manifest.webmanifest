@@ -1,0 +1,33 @@
+{
+  "name": "轻卡 · 卡路里记录",
+  "short_name": "轻卡",
+  "description": "扫码或搜索食物，记录每日热量与三大营养素，按基础代谢和目标体重规划饮食。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F5F6F4",
+  "theme_color": "#F5F6F4",
+  "categories": ["health", "fitness", "food"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
