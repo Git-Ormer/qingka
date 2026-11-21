@@ -1,7 +1,7 @@
 /* 轻卡 · 离线缓存
  * 静态资源缓存优先；条码查询（Open Food Facts）不缓存，始终走网络。
  */
-var CACHE = 'qingka-v1';
+var CACHE = 'qingka-v2';
 var ASSETS = [
   './',
   './index.html',
@@ -13,6 +13,7 @@ var ASSETS = [
   './js/ui.js',
   './js/scanner.js',
   './js/off.js',
+  './js/ai.js',
   './js/pwa.js',
   './js/app.js',
   './vendor/zxing.min.js',

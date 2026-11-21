@@ -5,6 +5,7 @@
   var N = window.Nutrition;
   var U = window.UI;
   var Store = window.Store;
+  var AI = window.AI;
 
   var MEALS = [
     { id: 'breakfast', label: '早餐' },
@@ -24,7 +25,9 @@
     portion: null,
     recent: [],
     demo: false,
-    manualBarcode: ''
+    manualBarcode: '',
+    ai: { image: '', items: [], note: '', meal: '', busy: false },
+    aiSettingsReturn: false
   };
 
   /* ---------------- 基础工具 ---------------- */
@@ -432,6 +435,14 @@
       '</section>' +
 
       '<section class="card">' +
+        '<div class="card-head"><h3>AI 拍照识别</h3><span class="pill">' + (AI && AI.hasKey() ? '已启用' : '未启用') + '</span></div>' +
+        '<button type="button" class="row-link" data-act="ai-settings">' +
+          (AI && AI.hasKey() ? '今日已用 ' + AI.usageToday() + ' 次 · 管理 API Key' : '填入 DeepSeek API Key，拍照自动识别') +
+          U.ICONS.chevron +
+        '</button>' +
+      '</section>' +
+
+      '<section class="card">' +
         '<div class="card-head"><h3>数据</h3><span class="muted small">只保存在本机</span></div>' +
         '<div class="btn-row">' +
           '<button type="button" class="btn ghost" data-act="export">导出备份</button>' +
@@ -629,6 +640,7 @@
     if (!keepState) {
       App.addTab = 'search';
       App.search = { q: '', cat: '全部' };
+      App.ai = { image: '', items: [], note: '', meal: '', busy: false };
     }
     App.manualBarcode = '';
     buildRecent();
@@ -645,6 +657,7 @@
       '<div class="seg-tabs" role="tablist">' +
         '<button type="button" data-act="add-tab" data-tab="search" class="' + (App.addTab === 'search' ? 'on' : '') + '">搜索</button>' +
         '<button type="button" data-act="add-tab" data-tab="scan" class="' + (App.addTab === 'scan' ? 'on' : '') + '">扫码</button>' +
+        '<button type="button" data-act="add-tab" data-tab="ai" class="' + (App.addTab === 'ai' ? 'on' : '') + '">拍照</button>' +
         '<button type="button" data-act="add-tab" data-tab="manual" class="' + (App.addTab === 'manual' ? 'on' : '') + '">手动</button>' +
       '</div>' +
       '<div id="add-body">' + addBodyHTML() + '</div>';
@@ -652,12 +665,14 @@
 
   function addBodyHTML() {
     if (App.addTab === 'scan') return scanBodyHTML();
+    if (App.addTab === 'ai') return aiBodyHTML();
     if (App.addTab === 'manual') return manualBodyHTML();
     return searchBodyHTML();
   }
 
   function switchAddTab(tab) {
     App.addTab = tab;
+    if (tab === 'ai' && !App.ai.meal) App.ai.meal = App.addMeal || mealForNow();
     U.$$('.seg-tabs [data-act="add-tab"]').forEach(function (b) {
       b.classList.toggle('on', b.getAttribute('data-tab') === tab);
     });
@@ -998,7 +1013,7 @@
         '<button type="button" class="btn ghost" data-act="scan-toggle">重新扫描</button>' +
         '<button type="button" class="btn ghost" data-act="scan-photo">拍照识别</button>' +
       '</div>' +
-      '<input type="file" id="scan-photo-input" accept="image/*" capture="environment" hidden>' +
+      '<input type="file" id="scan-photo-input" accept="image/*" capture="environment" class="sr-only">' +
       '<p class="fine">iPhone 建议用 Safari 打开；如果实时扫码打不开相机，点「拍照识别」对准条码拍一张照片也能识别。</p>' +
       '<div class="hr"><span>或者手动输入条码</span></div>' +
       '<form class="inline-form" data-form="barcode" novalidate>' +
@@ -1143,6 +1158,268 @@
     render();
   }
 
+  /* ---------------- AI 拍照识别 ---------------- */
+
+  function aiBodyHTML() {
+    if (!AI || !AI.hasKey()) return aiSetupHTML();
+
+    var hasImage = !!App.ai.image;
+    var items = App.ai.items;
+    return '' +
+      '<div class="ai-shot">' +
+        '<input type="file" id="ai-photo-input" accept="image/*" class="sr-only">' +
+        '<label class="ai-empty' + (hasImage ? ' hidden' : '') + '" for="ai-photo-input">' +
+          '<span class="ai-empty-icon">' + U.ICONS.scan + '</span>' +
+          '<b>拍一张这餐的照片</b>' +
+          '<span class="ai-empty-sub">尽量俯拍、光线充足，让所有食物都能看清</span>' +
+        '</label>' +
+        '<img id="ai-preview" class="ai-preview' + (hasImage ? '' : ' hidden') + '" alt="待识别的食物照片"' +
+          (hasImage ? ' src="' + App.ai.image + '"' : '') + '>' +
+      '</div>' +
+      '<div class="btn-row ai-actions">' +
+        '<button type="button" class="btn ghost" data-act="ai-pick">' + (hasImage ? '重选照片' : '拍照 / 选图') + '</button>' +
+        '<button type="button" class="btn primary" data-act="ai-run" id="ai-run"' + (hasImage ? '' : ' disabled') + '>' +
+          (items.length ? '重新识别' : '开始识别') +
+        '</button>' +
+      '</div>' +
+      '<div id="ai-result">' + (items.length ? aiReviewHTML() : '') + '</div>' +
+      '<div class="ai-foot"><span>发送前已压缩并去除定位信息</span>' +
+        '<button type="button" class="link" data-act="ai-settings">Key 设置</button></div>';
+  }
+
+  function aiSetupHTML() {
+    return '' +
+      '<div class="ai-setup">' +
+        '<div class="empty-icon">' + U.ICONS.spark + '</div>' +
+        '<h3>用照片记录一餐</h3>' +
+        '<p>填入 DeepSeek API Key 后，拍一张饭菜照片，AI 会自动估算食物、克数和营养，你确认后入账。</p>' +
+        '<button type="button" class="btn primary block" data-act="ai-settings">填入 API Key</button>' +
+        '<p class="fine">Key 只保存在这台手机；照片直接发送给 DeepSeek（不经过本应用服务器）；每顿约 0.4 分钱。</p>' +
+      '</div>';
+  }
+
+  function aiReviewHTML() {
+    var items = App.ai.items;
+    var total = items.reduce(function (sum, it) {
+      return sum + N.scale(it.per100, it.grams).kcal;
+    }, 0);
+
+    var rows = items.map(function (it, i) {
+      var s = N.scale(it.per100, it.grams);
+      return '<div class="ai-item" data-row="' + i + '">' +
+        '<div class="ai-item-main">' +
+          '<input class="ai-name" data-idx="' + i + '" value="' + U.esc(it.name) + '" maxlength="30" aria-label="食物名称">' +
+          '<div class="ai-item-sub">碳 <span data-carb="' + i + '">' + U.fmt(s.carb, 1) + '</span> · ' +
+            '蛋 <span data-protein="' + i + '">' + U.fmt(s.protein, 1) + '</span> · ' +
+            '脂 <span data-fat="' + i + '">' + U.fmt(s.fat, 1) + '</span> g</div>' +
+        '</div>' +
+        '<div class="ai-item-side">' +
+          '<label class="ai-grams"><input type="number" class="ai-grams-input" data-idx="' + i + '" value="' + it.grams + '" min="1" max="3000" inputmode="decimal"><span>g</span></label>' +
+          '<b class="ai-kcal" data-kcal="' + i + '">' + U.fmt(s.kcal) + '<span>kcal</span></b>' +
+          '<button type="button" class="icon-btn tiny" data-act="ai-del" data-idx="' + i + '" aria-label="删除">' + U.ICONS.close + '</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    return '<div class="ai-review">' +
+      '<div class="ai-review-head"><b>识别到 ' + items.length + ' 项</b><span id="ai-total">' + U.fmt(total) + ' 千卡</span></div>' +
+      (App.ai.note ? '<p class="ai-note">' + U.esc(App.ai.note) + '</p>' : '') +
+      '<div class="ai-items">' + rows + '</div>' +
+      '<div class="field" style="margin-top:12px"><label>记到哪一餐</label>' +
+        '<div class="seg" id="ai-meal">' +
+          MEALS.map(function (m) {
+            return '<button type="button" class="seg-btn' + (App.ai.meal === m.id ? ' on' : '') + '" data-act="ai-meal" data-meal="' + m.id + '">' + m.label + '</button>';
+          }).join('') +
+        '</div>' +
+      '</div>' +
+      '<button type="button" class="btn primary block" data-act="ai-add">全部添加</button>' +
+      '<p class="fine">AI 估算通常有 20%–30% 误差，请按实际份量调整克数再添加。</p>' +
+    '</div>';
+  }
+
+  function renderAIReview() {
+    var box = document.getElementById('ai-result');
+    if (box) box.innerHTML = App.ai.items.length ? aiReviewHTML() : '';
+  }
+
+  function updateAITotal() {
+    var el = document.getElementById('ai-total');
+    if (!el) return;
+    var total = App.ai.items.reduce(function (sum, it) {
+      return sum + N.scale(it.per100, it.grams).kcal;
+    }, 0);
+    el.textContent = U.fmt(total) + ' 千卡';
+  }
+
+  function openAISettings(opts) {
+    opts = opts || {};
+    App.aiSettingsReturn = !!opts.returnToAI;
+    var s = AI.getState();
+    var has = !!s.key;
+
+    U.openSheet(
+      '<div class="sheet-head"><div class="sheet-title">AI 拍照识别</div>' +
+        '<button type="button" class="icon-btn" data-act="close-sheet" aria-label="关闭">' + U.ICONS.close + '</button></div>' +
+      '<div class="ai-status' + (has ? ' on' : '') + '"><span class="dot"></span>' +
+        (has ? '已启用 · 今日已用 ' + s.usageToday + ' / ' + (s.limit > 0 ? s.limit : '不限') + ' 次' : '未启用') +
+      '</div>' +
+      '<div class="field"><label>DeepSeek API Key</label>' +
+        '<input id="ai-key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="' +
+          (has ? '已保存 ' + U.esc(AI.maskKey(s.key)) + '（留空不修改）' : 'sk-...') + '">' +
+      '</div>' +
+      '<div class="field"><label>每日识别上限</label><select id="ai-limit">' +
+        [10, 20, 50, 0].map(function (n) {
+          return '<option value="' + n + '"' + (s.limit === n ? ' selected' : '') + '>' + (n ? n + ' 次 / 天' : '不限次数') + '</option>';
+        }).join('') +
+      '</select></div>' +
+      '<div class="btn-row">' +
+        '<button type="button" class="btn ghost" data-act="ai-test">测试连接</button>' +
+        '<button type="button" class="btn primary" data-act="ai-save">保存</button>' +
+      '</div>' +
+      (has ? '<button type="button" class="row-link danger-text" data-act="ai-clear">清除 API Key</button>' : '') +
+      '<p class="fine">Key 只保存在这台手机的浏览器里，不会进入 GitHub 仓库，也不会写进导出的备份文件。照片会直接发送到 api.deepseek.com 识别（已在手机端压缩并去除定位信息），本应用没有服务器。</p>' +
+      '<p class="fine">还没有 Key？打开 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com/api_keys</a> 创建一个，充值少量金额即可。</p>',
+      'sheet-tall'
+    );
+  }
+
+  function saveAISettings() {
+    var input = document.getElementById('ai-key-input');
+    var limitEl = document.getElementById('ai-limit');
+    var key = input ? input.value.trim() : '';
+    if (key) AI.setKey(key);
+    if (limitEl) AI.setLimit(Number(limitEl.value));
+    if (!AI.hasKey()) {
+      U.toast('请先填入 API Key');
+      return;
+    }
+    U.closeSheet();
+    U.toast('AI 拍照识别已启用');
+    if (App.aiSettingsReturn) {
+      App.aiSettingsReturn = false;
+      App.addTab = 'ai';
+      App.ai.meal = App.ai.meal || App.addMeal || mealForNow();
+      openAdd(App.addMeal, true);
+    } else {
+      render();
+    }
+  }
+
+  async function testAIKey() {
+    var input = document.getElementById('ai-key-input');
+    var key = input ? input.value.trim() : '';
+    U.toast('正在测试连接…');
+    try {
+      await AI.testKey(key || undefined);
+      U.toast('连接正常，Key 可以使用');
+    } catch (err) {
+      U.toast(AI.errorMessage(err));
+    }
+  }
+
+  function clearAIKey() {
+    U.confirm({
+      title: '清除 API Key？',
+      text: '清除后 AI 拍照识别需要重新填写 Key，已经记录的饮食不受影响。',
+      ok: '清除',
+      danger: true
+    }).then(function (ok) {
+      if (!ok) return;
+      AI.clearKey();
+      App.ai.image = '';
+      App.ai.items = [];
+      U.closeSheet();
+      U.toast('已清除 Key');
+      render();
+    });
+  }
+
+  function handleAIPhoto(file) {
+    if (!file) return;
+    U.toast('正在处理图片…');
+    AI.compress(file, 1024, 0.82).then(function (dataUrl) {
+      App.ai.image = dataUrl;
+      App.ai.items = [];
+      App.ai.note = '';
+      var img = document.getElementById('ai-preview');
+      if (img) {
+        img.src = dataUrl;
+        img.classList.remove('hidden');
+      }
+      var empty = document.querySelector('.ai-empty');
+      if (empty) empty.classList.add('hidden');
+      var run = document.getElementById('ai-run');
+      if (run) {
+        run.disabled = false;
+        run.textContent = '开始识别';
+      }
+      var body = document.getElementById('ai-result');
+      if (body) body.innerHTML = '';
+    }).catch(function (err) {
+      U.toast(AI.errorMessage(err));
+    });
+  }
+
+  async function runAIRecognize() {
+    if (!App.ai.image) { U.toast('请先拍照或选择照片'); return; }
+    if (App.ai.busy) return;
+    App.ai.busy = true;
+    var btn = document.getElementById('ai-run');
+    if (btn) { btn.disabled = true; btn.textContent = '识别中…'; }
+
+    try {
+      var result = await AI.recognize(App.ai.image);
+      App.ai.items = result.items;
+      App.ai.note = result.note || '';
+      if (!App.ai.meal) App.ai.meal = App.addMeal || mealForNow();
+      renderAIReview();
+      if (btn) btn.textContent = '重新识别';
+      var box = document.getElementById('ai-result');
+      if (box && box.scrollIntoView) {
+        setTimeout(function () {
+          try { box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* ignore */ }
+        }, 80);
+      }
+    } catch (err) {
+      U.toast(AI.errorMessage(err));
+      if (btn) btn.textContent = App.ai.items.length ? '重新识别' : '开始识别';
+    } finally {
+      App.ai.busy = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function addAIEntries() {
+    var items = App.ai.items.filter(function (it) { return it.name && it.grams > 0; });
+    if (!items.length) { U.toast('没有可添加的食物'); return; }
+    var meal = App.ai.meal || mealForNow();
+    if (!state.logs[App.date]) state.logs[App.date] = [];
+
+    items.forEach(function (it) {
+      var s = N.scale(it.per100, it.grams);
+      state.logs[App.date].push({
+        id: uid(),
+        name: it.name,
+        brand: '',
+        grams: it.grams,
+        unit: 'g',
+        meal: meal,
+        per100: it.per100,
+        kcal: s.kcal,
+        carb: s.carb,
+        protein: s.protein,
+        fat: s.fat,
+        source: 'ai',
+        at: Date.now()
+      });
+    });
+    persist();
+    U.closeSheet();
+    App.ai = { image: '', items: [], note: '', meal: '', busy: false };
+    U.toast('已添加 ' + items.length + ' 项');
+    render();
+  }
+
   /* ---------------- 体重 / 数据 ---------------- */
 
   function saveWeight(form) {
@@ -1260,6 +1537,35 @@
       if (seg) U.$$('.seg-btn', seg).forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-meal') === App.portion.meal); });
     },
     'confirm-portion': function () { confirmPortion(); },
+    'ai-settings': function () {
+      openAISettings({ returnToAI: !!document.getElementById('add-body') });
+    },
+    'ai-save': function () { saveAISettings(); },
+    'ai-test': function () { testAIKey(); },
+    'ai-clear': function () { clearAIKey(); },
+    'ai-pick': function () {
+      var input = document.getElementById('ai-photo-input');
+      if (input) input.click();
+    },
+    'ai-run': function () { runAIRecognize(); },
+    'ai-del': function (el) {
+      var idx = Number(el.getAttribute('data-idx'));
+      if (!App.ai.items[idx]) return;
+      App.ai.items.splice(idx, 1);
+      renderAIReview();
+      if (!App.ai.items.length) {
+        var run = document.getElementById('ai-run');
+        if (run) run.textContent = '开始识别';
+      }
+    },
+    'ai-meal': function (el) {
+      App.ai.meal = el.getAttribute('data-meal');
+      var seg = document.getElementById('ai-meal');
+      if (seg) U.$$('.seg-btn', seg).forEach(function (b) {
+        b.classList.toggle('on', b.getAttribute('data-meal') === App.ai.meal);
+      });
+    },
+    'ai-add': function () { addAIEntries(); },
     'delete-entry': function () {
       var s = App.portion;
       if (!s || s.mode !== 'edit') return;
@@ -1378,6 +1684,32 @@
       renderResults();
       return;
     }
+    if (t.classList && t.classList.contains('ai-grams-input')) {
+      var gIdx = Number(t.getAttribute('data-idx'));
+      var gItem = App.ai.items[gIdx];
+      if (!gItem || t.value === '') return;
+      var grams = U.clamp(t.value, 1, 3000);
+      gItem.grams = grams;
+      var scaled = N.scale(gItem.per100, grams);
+      var row = t.closest('.ai-item');
+      if (row) {
+        var kcalEl = row.querySelector('[data-kcal="' + gIdx + '"]');
+        if (kcalEl) kcalEl.innerHTML = U.fmt(scaled.kcal) + '<span>kcal</span>';
+        var carbEl = row.querySelector('[data-carb="' + gIdx + '"]');
+        if (carbEl) carbEl.textContent = U.fmt(scaled.carb, 1);
+        var proEl = row.querySelector('[data-protein="' + gIdx + '"]');
+        if (proEl) proEl.textContent = U.fmt(scaled.protein, 1);
+        var fatEl = row.querySelector('[data-fat="' + gIdx + '"]');
+        if (fatEl) fatEl.textContent = U.fmt(scaled.fat, 1);
+      }
+      updateAITotal();
+      return;
+    }
+    if (t.classList && t.classList.contains('ai-name')) {
+      var nIdx = Number(t.getAttribute('data-idx'));
+      if (App.ai.items[nIdx]) App.ai.items[nIdx].name = String(t.value).slice(0, 30);
+      return;
+    }
     if (t.id === 'grams') { updateLive(); return; }
     if (t.closest && t.closest('#manual-form')) { updateManualLive(); return; }
     if (t.closest && t.closest('.profile-form')) updatePreview(t.closest('.profile-form'));
@@ -1385,6 +1717,12 @@
 
   function onChange(e) {
     var t = e.target;
+    if (t.id === 'ai-photo-input') {
+      var aiFile = t.files && t.files[0];
+      t.value = '';
+      if (aiFile) handleAIPhoto(aiFile);
+      return;
+    }
     if (t.id === 'scan-photo-input') {
       var file = t.files && t.files[0];
       t.value = '';
@@ -1489,7 +1827,13 @@
   window.QK = {
     state: function () { return state; },
     render: render,
-    openAdd: openAdd
+    openAdd: openAdd,
+    showAIReview: function (items, note) {
+      App.ai.items = items || [];
+      App.ai.note = note || '';
+      App.ai.meal = App.ai.meal || mealForNow();
+      renderAIReview();
+    }
   };
 
   boot();
