@@ -55,12 +55,20 @@
     if (!name) name = '未命名食品';
     var brand = String(p.brands || '').split(',')[0].trim();
 
+    var servingGrams = n(p.serving_quantity);
+    var portion = null;
+    if (servingGrams > 0 && servingGrams <= 5000) {
+      var label = String(p.serving_size || '').trim().slice(0, 20);
+      portion = { label: label || '1 份', grams: Math.round(servingGrams) };
+    }
+
     return {
       name: name,
       brand: brand,
       barcode: code,
       unit: /ml|cl|l\b/i.test(p.quantity || '') ? 'ml' : 'g',
       per100: per100,
+      portion: portion,
       image: p.image_front_small_url || '',
       source: 'Open Food Facts'
     };

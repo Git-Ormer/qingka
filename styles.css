@@ -410,6 +410,22 @@ svg { display: block; }
   color: #9AA49B;
 }
 
+.ai-barcode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid #E2F0E7;
+  border-radius: 12px;
+  background: #F3F8F4;
+}
+.ai-barcode-text { display: flex; flex-direction: column; min-width: 0; }
+.ai-barcode-text b { font-size: 12.5px; color: var(--accent-deep); }
+.ai-barcode-text span { margin-top: 2px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ai-barcode .btn { flex: none; }
+
 .ai-status {
   display: flex;
   align-items: center;
@@ -873,6 +889,7 @@ svg { display: block; }
 .portion-name { font-size: 18px; font-weight: 650; line-height: 1.3; }
 .portion-sub { margin-top: 4px; font-size: 12.5px; color: var(--muted); }
 .portion-macros { margin-top: 4px; font-size: 11.5px; color: #98A099; }
+.portion-serve { margin-top: 5px; font-size: 11.5px; color: var(--accent-deep); }
 
 .grams-input {
   display: flex;

@@ -26,7 +26,8 @@
     recent: [],
     demo: false,
     manualBarcode: '',
-    ai: { image: '', items: [], note: '', meal: '', busy: false },
+    manualMode: '100g',
+    ai: { image: '', items: [], note: '', meal: '', busy: false, detectedCode: '' },
     aiSettingsReturn: false
   };
 
@@ -103,15 +104,21 @@
 
   var PACK_INDEX = null;
 
+  function packs() {
+    var list = [];
+    if (window.NZ_PACK && Array.isArray(window.NZ_PACK.items)) list.push({ pack: window.NZ_PACK, tag: 'NZ包装' });
+    if (window.AU_PACK && Array.isArray(window.AU_PACK.items)) list.push({ pack: window.AU_PACK, tag: 'AU包装' });
+    return list;
+  }
+
   function packIndex() {
     if (PACK_INDEX) return PACK_INDEX;
     PACK_INDEX = {};
-    var pack = window.NZ_PACK;
-    if (pack && Array.isArray(pack.items)) {
-      pack.items.forEach(function (it) {
-        if (it && it[0]) PACK_INDEX[it[0]] = it;
+    packs().forEach(function (p) {
+      p.pack.items.forEach(function (it) {
+        if (it && it[0] && !PACK_INDEX[it[0]]) PACK_INDEX[it[0]] = it;
       });
-    }
+    });
     return PACK_INDEX;
   }
 
@@ -128,6 +135,14 @@
 
   function packByCode(code) {
     return packIndex()[code] || null;
+  }
+
+  function packNote() {
+    var list = packs();
+    if (!list.length) return '';
+    return list.map(function (p) {
+      return (p.pack.meta && p.pack.meta.name ? p.pack.meta.name : p.tag) + ' ' + p.pack.items.length + ' 条';
+    }).join('、') + ' 来自 Open Food Facts（ODbL）。';
   }
 
   function toFood(c) {
@@ -671,7 +686,8 @@
     if (!keepState) {
       App.addTab = 'search';
       App.search = { q: '', cat: '全部' };
-      App.ai = { image: '', items: [], note: '', meal: '', busy: false };
+      App.ai = { image: '', items: [], note: '', meal: '', busy: false, detectedCode: '' };
+      App.manualMode = '100g';
     }
     App.manualBarcode = '';
     buildRecent();
@@ -776,16 +792,18 @@
       out.push({ kind: 'local', id: item.id, food: window.asFood(item), tag: item.cat });
     });
 
-    if (q && window.NZ_PACK && Array.isArray(window.NZ_PACK.items) && (cat === '全部' || cat === '新西兰')) {
+    if (q && (cat === '全部' || cat === '新西兰')) {
       var packHits = 0;
-      for (var i = 0; i < window.NZ_PACK.items.length && packHits < 10; i++) {
-        var it = window.NZ_PACK.items[i];
-        if (!matches(it[1] + ' ' + (it[2] || ''), q)) continue;
-        if (seenNames[it[1]]) continue;
-        out.push({ kind: 'pack', id: it[0], food: packFood(it), tag: 'NZ包装' });
-        seenNames[it[1]] = 1;
-        packHits++;
-      }
+      packs().forEach(function (p) {
+        for (var j = 0; j < p.pack.items.length && packHits < 10; j++) {
+          var it = p.pack.items[j];
+          if (!matches(it[1] + ' ' + (it[2] || ''), q)) continue;
+          if (seenNames[it[1]]) continue;
+          out.push({ kind: 'pack', id: it[0], food: packFood(it), tag: p.tag });
+          seenNames[it[1]] = 1;
+          packHits++;
+        }
+      });
     }
 
     if (q && cat === '全部') {
@@ -883,6 +901,11 @@
     var f = s.food;
     var p = s.per100;
     var canSave = s.mode === 'add' && f.source !== 'local' && !state.customFoods.some(function (c) { return c.name === f.name; });
+    var perServe = '';
+    if (f.portion && Number(f.portion.grams) > 0) {
+      var ps = N.scale(p, f.portion.grams);
+      perServe = '<div class="portion-serve">每份（' + U.esc(f.portion.label || '1 份') + ' ' + U.fmt(f.portion.grams) + s.unit + '）≈ ' + U.fmt(ps.kcal) + ' 千卡</div>';
+    }
 
     return '' +
       '<div class="sheet-head">' +
@@ -897,6 +920,7 @@
           '<div class="portion-name">' + U.esc(f.name) + '</div>' +
           '<div class="portion-sub">' + (f.brand ? U.esc(f.brand) + ' · ' : '') + '每 100' + s.unit + ' · ' + U.fmt(p.kcal) + ' 千卡</div>' +
           '<div class="portion-macros">碳 ' + U.fmt(p.carb, 1) + ' · 蛋 ' + U.fmt(p.protein, 1) + ' · 脂 ' + U.fmt(p.fat, 1) + '</div>' +
+          perServe +
         '</div>' +
       '</div>' +
 
@@ -1021,6 +1045,8 @@
       existing.per100 = food.per100;
       existing.barcode = barcode || existing.barcode || '';
       existing.brand = food.brand || existing.brand || '';
+      existing.portion = food.portion || existing.portion || null;
+      existing.unit = food.unit || existing.unit || 'g';
       return;
     }
     state.customFoods.push({
@@ -1139,18 +1165,32 @@
   /* ----- 手动添加 ----- */
 
   function manualBodyHTML() {
+    var serve = App.manualMode === 'serve';
     return '' +
       '<form id="manual-form" data-form="manual" novalidate>' +
         '<div class="field"><label>食物名称</label><input name="name" type="text" placeholder="如：全麦贝果" required></div>' +
+        '<div class="field"><label>营养标注方式</label>' +
+          '<div class="seg" id="manual-mode">' +
+            '<button type="button" class="seg-btn' + (serve ? '' : ' on') + '" data-act="manual-mode" data-mode="100g">每 100g</button>' +
+            '<button type="button" class="seg-btn' + (serve ? ' on' : '') + '" data-act="manual-mode" data-mode="serve">每份</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="field' + (serve ? '' : ' hidden') + '" id="manual-serve">' +
+          '<label>一份是多少 g</label>' +
+          '<input name="serveGrams" type="number" inputmode="decimal" value="100" min="1" max="5000">' +
+        '</div>' +
         '<div class="grid-4">' +
-          '<div class="field"><label>热量</label><input name="kcal" type="number" inputmode="decimal" placeholder="kcal" min="0" required></div>' +
+          '<div class="field"><label id="manual-kcal-label">热量' + (serve ? '（每份）' : '') + '</label><input name="kcal" type="number" inputmode="decimal" placeholder="kcal" min="0" required></div>' +
           '<div class="field"><label>碳水 g</label><input name="carb" type="number" inputmode="decimal" placeholder="0" min="0"></div>' +
           '<div class="field"><label>蛋白 g</label><input name="protein" type="number" inputmode="decimal" placeholder="0" min="0"></div>' +
           '<div class="field"><label>脂肪 g</label><input name="fat" type="number" inputmode="decimal" placeholder="0" min="0"></div>' +
         '</div>' +
-        '<p class="fine">以上为每 100g（或 100ml）的数值，包装「营养成分表」通常按每 100g 标注。</p>' +
+        '<p class="fine" id="manual-hint">' +
+          (serve ? '按包装上的「每份」填写，并填写一份的克数；会自动换算成每 100g 保存。' : '以上为每 100g（或 100ml）的数值，包装「营养成分表」通常按每 100g 标注。') +
+        '</p>' +
         '<div class="grid-2">' +
-          '<div class="field"><label>吃了多少 g</label><input name="grams" type="number" inputmode="decimal" value="100" min="1" max="5000"></div>' +
+          '<div class="field' + (serve ? ' hidden' : '') + '" id="manual-grams-wrap"><label>吃了多少 g</label><input name="grams" type="number" inputmode="decimal" value="100" min="1" max="5000"></div>' +
+          '<div class="field' + (serve ? '' : ' hidden') + '" id="manual-servings-wrap"><label>吃了几份</label><input name="servings" type="number" inputmode="decimal" value="1" min="0.1" step="0.1"></div>' +
           '<div class="field"><label>餐次</label><select name="meal">' +
             MEALS.map(function (m) {
               return '<option value="' + m.id + '"' + (App.addMeal === m.id ? ' selected' : '') + '>' + m.label + '</option>';
@@ -1164,38 +1204,109 @@
       '</form>';
   }
 
+  function syncManualMode(mode) {
+    App.manualMode = mode === 'serve' ? 'serve' : '100g';
+    var serve = App.manualMode === 'serve';
+    var seg = document.getElementById('manual-mode');
+    if (seg) U.$$('.seg-btn', seg).forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-mode') === App.manualMode);
+    });
+    var serveWrap = document.getElementById('manual-serve');
+    if (serveWrap) serveWrap.classList.toggle('hidden', !serve);
+    var gramsWrap = document.getElementById('manual-grams-wrap');
+    if (gramsWrap) gramsWrap.classList.toggle('hidden', serve);
+    var servingsWrap = document.getElementById('manual-servings-wrap');
+    if (servingsWrap) servingsWrap.classList.toggle('hidden', !serve);
+    var label = document.getElementById('manual-kcal-label');
+    if (label) label.textContent = serve ? '热量（每份）' : '热量';
+    var hint = document.getElementById('manual-hint');
+    if (hint) {
+      hint.textContent = serve
+        ? '按包装上的「每份」填写，并填写一份的克数；会自动换算成每 100g 保存。'
+        : '以上为每 100g（或 100ml）的数值，包装「营养成分表」通常按每 100g 标注。';
+    }
+    updateManualLive();
+  }
+
   function updateManualLive() {
     var form = document.getElementById('manual-form');
     var box = document.getElementById('manual-live');
     if (!form || !box) return;
     var fd = new FormData(form);
-    var per100 = {
+    var serve = App.manualMode === 'serve';
+    var serveGrams = Number(fd.get('serveGrams')) || 0;
+    var raw = {
       kcal: Number(fd.get('kcal')) || 0,
       carb: Number(fd.get('carb')) || 0,
       protein: Number(fd.get('protein')) || 0,
       fat: Number(fd.get('fat')) || 0
     };
+
+    var per100 = raw;
     var grams = Number(fd.get('grams')) || 0;
-    if (!per100.kcal && !grams) { box.innerHTML = ''; return; }
-    box.innerHTML = liveText(per100, grams, 'g');
+    if (serve) {
+      if (!serveGrams) {
+        box.innerHTML = '<span>请先填写一份是多少 g</span>';
+        return;
+      }
+      per100 = {
+        kcal: (raw.kcal / serveGrams) * 100,
+        carb: (raw.carb / serveGrams) * 100,
+        protein: (raw.protein / serveGrams) * 100,
+        fat: (raw.fat / serveGrams) * 100
+      };
+      var servings = Number(fd.get('servings')) || 1;
+      grams = servings * serveGrams;
+    }
+
+    if (!raw.kcal && !grams) { box.innerHTML = ''; return; }
+    var html = liveText(per100, grams, 'g');
+    if (serve) {
+      html += '<span>每份 ' + U.fmt(serveGrams) + 'g ≈ ' + U.fmt(raw.kcal) + ' 千卡 · 共 ' + U.fmt(grams) + 'g</span>';
+    }
+    box.innerHTML = html;
   }
 
   function saveManual(form) {
     var fd = new FormData(form);
     var name = String(fd.get('name') || '').trim();
     if (!name) { U.toast('请填写食物名称'); return; }
-    var per100 = {
+
+    var serve = App.manualMode === 'serve';
+    var serveGrams = Number(fd.get('serveGrams')) || 0;
+    var raw = {
       kcal: Math.round(Number(fd.get('kcal')) || 0),
       carb: Math.round((Number(fd.get('carb')) || 0) * 10) / 10,
       protein: Math.round((Number(fd.get('protein')) || 0) * 10) / 10,
       fat: Math.round((Number(fd.get('fat')) || 0) * 10) / 10
     };
-    var grams = U.clamp(fd.get('grams'), 1, 5000);
+    if (!raw.kcal) { U.toast(serve ? '请填写每份的热量' : '请填写每 100g 的热量'); return; }
+
+    var per100 = raw;
+    var portion = null;
+    var grams;
+    if (serve) {
+      if (!serveGrams) { U.toast('请填写一份是多少 g'); return; }
+      var servings = U.clamp(fd.get('servings') || 1, 0.1, 100);
+      grams = Math.round(servings * serveGrams);
+      per100 = {
+        kcal: Math.round((raw.kcal / serveGrams) * 100),
+        carb: Math.round((raw.carb / serveGrams) * 1000) / 10,
+        protein: Math.round((raw.protein / serveGrams) * 1000) / 10,
+        fat: Math.round((raw.fat / serveGrams) * 1000) / 10
+      };
+      portion = { label: '1 份', grams: serveGrams };
+    } else {
+      grams = U.clamp(fd.get('grams'), 1, 5000);
+    }
+
     var meal = String(fd.get('meal') || 'snack');
     var barcode = String(fd.get('barcode') || '').trim();
-    if (!per100.kcal) { U.toast('请填写热量（每 100g）'); return; }
 
-    var food = { name: name, brand: '', per100: per100, unit: 'g', barcode: barcode, source: 'manual' };
+    var food = {
+      name: name, brand: '', per100: per100, unit: 'g',
+      barcode: barcode, source: 'manual', portion: portion
+    };
     if (fd.get('saveLib')) saveCustom(food, barcode);
     var sc = N.scale(per100, grams);
     if (!state.logs[App.date]) state.logs[App.date] = [];
@@ -1234,6 +1345,7 @@
           (items.length ? '重新识别' : '开始识别') +
         '</button>' +
       '</div>' +
+      '<div id="ai-barcode-tip">' + (App.ai.detectedCode ? aiBarcodeTipHTML(App.ai.detectedCode) : '') + '</div>' +
       '<div id="ai-result">' + (items.length ? aiReviewHTML() : '') + '</div>' +
       '<div class="ai-foot"><span>发送前已压缩并去除定位信息</span>' +
         '<button type="button" class="link" data-act="ai-settings">Key 设置</button></div>';
@@ -1284,9 +1396,30 @@
           }).join('') +
         '</div>' +
       '</div>' +
+      '<label class="check"><input type="checkbox" id="ai-save-lib" checked> 同时把这几种食物保存到我的食物库</label>' +
       '<button type="button" class="btn primary block" data-act="ai-add">全部添加</button>' +
       '<p class="fine">AI 估算通常有 20%–30% 误差，请按实际份量调整克数再添加。</p>' +
     '</div>';
+  }
+
+  function aiBarcodeTipHTML(code) {
+    return '<div class="ai-barcode">' +
+      '<div class="ai-barcode-text"><b>照片里检测到条码</b><span>' + U.esc(code) + '</span></div>' +
+      '<button type="button" class="btn small" data-act="ai-barcode-lookup">查商品</button>' +
+    '</div>';
+  }
+
+  function detectBarcodeInPhoto(file) {
+    var tip = document.getElementById('ai-barcode-tip');
+    if (!tip || !window.Scanner || typeof window.Scanner.decodeImageFile !== 'function') return;
+    tip.innerHTML = '<span class="fine">正在检查照片里有没有条码…</span>';
+    window.Scanner.decodeImageFile(file).then(function (code) {
+      App.ai.detectedCode = code;
+      if (tip) tip.innerHTML = aiBarcodeTipHTML(code);
+    }).catch(function () {
+      App.ai.detectedCode = '';
+      if (tip) tip.innerHTML = '';
+    });
   }
 
   function renderAIReview() {
@@ -1393,6 +1526,10 @@
       App.ai.image = dataUrl;
       App.ai.items = [];
       App.ai.note = '';
+      App.ai.detectedCode = '';
+      var tip = document.getElementById('ai-barcode-tip');
+      if (tip) tip.innerHTML = '';
+      detectBarcodeInPhoto(file);
       var img = document.getElementById('ai-preview');
       if (img) {
         img.src = dataUrl;
@@ -1465,10 +1602,31 @@
         at: Date.now()
       });
     });
+
+    var saved = 0;
+    var saveLib = document.getElementById('ai-save-lib');
+    if (saveLib && saveLib.checked) {
+      items.forEach(function (it) {
+        var exists = state.customFoods.some(function (c) { return c.name === it.name; });
+        if (exists) return;
+        state.customFoods.push({
+          id: uid(),
+          name: it.name,
+          brand: '',
+          per100: it.per100,
+          portion: { label: '1 份', grams: it.grams },
+          unit: 'g',
+          barcode: '',
+          source: 'ai'
+        });
+        saved++;
+      });
+    }
+
     persist();
     U.closeSheet();
-    App.ai = { image: '', items: [], note: '', meal: '', busy: false };
-    U.toast('已添加 ' + items.length + ' 项');
+    App.ai = { image: '', items: [], note: '', meal: '', busy: false, detectedCode: '' };
+    U.toast('已添加 ' + items.length + ' 项' + (saved ? '，已存入食物库 ' + saved + ' 项' : ''));
     render();
   }
 
@@ -1531,9 +1689,14 @@
   function showFoodLibrary() {
     var list = state.customFoods.length
       ? state.customFoods.map(function (c) {
+          var serve = '';
+          if (c.portion && Number(c.portion.grams) > 0) {
+            var ps = N.scale(c.per100, c.portion.grams);
+            serve = ' · ' + U.esc(c.portion.label || '1 份') + ' ' + U.fmt(c.portion.grams) + (c.unit === 'ml' ? 'ml' : 'g') + ' ' + U.fmt(ps.kcal) + ' 千卡';
+          }
           return '<div class="food-row static">' +
             '<div class="food-main"><div class="food-name">' + U.esc(c.name) + (c.barcode ? ' <span class="tag">条码</span>' : '') + '</div>' +
-            '<div class="food-sub">每 100' + (c.unit === 'ml' ? 'ml' : 'g') + ' · ' + U.fmt(c.per100.kcal) + ' 千卡 · 碳 ' + U.fmt(c.per100.carb, 1) + ' · 蛋 ' + U.fmt(c.per100.protein, 1) + ' · 脂 ' + U.fmt(c.per100.fat, 1) + '</div></div>' +
+            '<div class="food-sub">每 100' + (c.unit === 'ml' ? 'ml' : 'g') + ' · ' + U.fmt(c.per100.kcal) + ' 千卡 · 碳 ' + U.fmt(c.per100.carb, 1) + ' · 蛋 ' + U.fmt(c.per100.protein, 1) + ' · 脂 ' + U.fmt(c.per100.fat, 1) + serve + '</div></div>' +
             '<button type="button" class="icon-btn tiny" data-act="del-custom" data-id="' + c.id + '" aria-label="删除">' + U.ICONS.trash + '</button>' +
           '</div>';
         }).join('')
@@ -1549,11 +1712,7 @@
       '<p class="fine">导出为 JSON，可换手机迁移或分享给朋友；导入会与现有食物合并，不覆盖。</p>' +
       '<input type="file" id="food-pack-input" accept="application/json,.json" class="sr-only">' +
       '<div class="food-list">' + list + '</div>' +
-      '<p class="fine">' +
-        (window.NZ_PACK && Array.isArray(window.NZ_PACK.items)
-          ? '新西兰包装数据来自 Open Food Facts（ODbL），共 ' + window.NZ_PACK.items.length + ' 条。'
-          : '') +
-        '删除后不会影响已经记录的饮食。</p>',
+      '<p class="fine">' + packNote() + '删除后不会影响已经记录的饮食。</p>',
       'sheet-tall'
     );
   }
@@ -1743,6 +1902,9 @@
       });
     },
     'ai-add': function () { addAIEntries(); },
+    'ai-barcode-lookup': function () {
+      if (App.ai.detectedCode) lookupCode(App.ai.detectedCode);
+    },
     'delete-entry': function () {
       var s = App.portion;
       if (!s || s.mode !== 'edit') return;
@@ -1786,8 +1948,10 @@
       var input = document.getElementById('scan-photo-input');
       if (input) input.click();
     },
-    'manual-barcode': function (el) {
-      App.manualBarcode = el.getAttribute('data-code') || '';
+    'manual-mode': function (el) {
+      syncManualMode(el.getAttribute('data-mode'));
+    },
+    'manual-barcode': function (el) {      App.manualBarcode = el.getAttribute('data-code') || '';
       App.addTab = 'manual';
       U.$$('.seg-tabs [data-act="add-tab"]').forEach(function (b) {
         b.classList.toggle('on', b.getAttribute('data-tab') === 'manual');

@@ -162,6 +162,32 @@ async function main() {
   assert.strictEqual(state.customFoods.length, 1, '应保存到我的食物库');
   ok('手动填写营养并保存到食物库');
 
+  // ---------- 按每份录入 ----------
+  doc.querySelector('#view [data-act=open-add]').click();
+  await sleep(150);
+  doc.querySelector('.seg-tabs [data-tab="manual"]').click();
+  await sleep(120);
+  doc.querySelector('[data-act="manual-mode"][data-mode="serve"]').click();
+  await sleep(100);
+  const serveForm = doc.getElementById('manual-form');
+  serveForm.querySelector('[name="name"]').value = '每份测试';
+  serveForm.querySelector('[name="serveGrams"]').value = '30';
+  serveForm.querySelector('[name="kcal"]').value = '120';
+  serveForm.querySelector('[name="carb"]').value = '15';
+  serveForm.querySelector('[name="protein"]').value = '5';
+  serveForm.querySelector('[name="fat"]').value = '4';
+  serveForm.querySelector('[name="servings"]').value = '2';
+  submit(window, serveForm);
+  await sleep(150);
+  const serveEntry = state.logs[today][state.logs[today].length - 1];
+  assert.strictEqual(serveEntry.name, '每份测试');
+  assert.strictEqual(serveEntry.grams, 60);
+  assert.strictEqual(serveEntry.kcal, 240);
+  assert.strictEqual(serveEntry.per100.kcal, 400);
+  const serveFood = state.customFoods.filter((c) => c.name === '每份测试')[0];
+  assert.ok(serveFood && serveFood.portion && serveFood.portion.grams === 30, '应保存每份克数');
+  ok('按每份录入并换算成每 100g');
+
   // ---------- 扫码（无相机时应给出提示） ----------
   doc.querySelector('#view [data-act=open-add]').click();
   await sleep(120);
@@ -186,9 +212,10 @@ async function main() {
   submit(window, barcodeForm);
   const portionName = await waitFor(() => doc.querySelector('#sheet .portion-name'), 12000);
   assert.ok(/nutella/i.test(text(portionName)), '扫码查询后应进入份量页');
+  const beforeBarcodeAdd = state.logs[today].length;
   doc.querySelector('[data-act="confirm-portion"]').click();
   await sleep(150);
-  assert.strictEqual(state.logs[today].length, 9, '条码查询添加后应有 9 条记录');
+  assert.strictEqual(state.logs[today].length, beforeBarcodeAdd + 1, '条码查询添加后应增加一条记录');
   ok('条码查询到添加记录的完整链路');
 
   // ---------- 我的 / 体重 ----------
@@ -306,6 +333,7 @@ async function main() {
   ok('API 错误与每日上限提示');
 
   const beforeAIAdd = state.logs[today].length;
+  const beforeAIFoods = state.customFoods.length;
   window.QK.showAIReview([
     { name: '测试饭', grams: 200, per100: { kcal: 100, carb: 10, protein: 5, fat: 3 } },
     { name: '测试菜', grams: 100, per100: { kcal: 50, carb: 5, protein: 2, fat: 2 } }
@@ -316,7 +344,8 @@ async function main() {
   doc.querySelector('[data-act="ai-add"]').click();
   await sleep(200);
   assert.strictEqual(state.logs[today].length, beforeAIAdd + 2, '应一次添加两项');
-  ok('复核识别结果并批量入账');
+  assert.strictEqual(state.customFoods.length, beforeAIFoods + 2, 'AI 食物应同时存入食物库');
+  ok('复核识别结果、批量入账并存入食物库');
 
   // ---------- 食物库导出 / 导入 ----------
   doc.querySelector('.tab-item[data-tab="me"]').click();
@@ -341,8 +370,9 @@ async function main() {
   await sleep(100);
   ok('食物库可导出为条码包并合并导入');
 
-  // ---------- 内置新西兰条码包 ----------
+  // ---------- 内置新西兰 / 澳大利亚条码包 ----------
   assert.ok(window.NZ_PACK && window.NZ_PACK.items.length >= 1000, '应加载新西兰条码包');
+  assert.ok(window.AU_PACK && window.AU_PACK.items.length >= 1000, '应加载澳大利亚条码包');
   const packItem = window.NZ_PACK.items[0];
   doc.querySelector('.tab-item[data-tab="home"]').click();
   await sleep(150);
@@ -358,6 +388,20 @@ async function main() {
   doc.querySelector('[data-act="close-sheet"]').click();
   await sleep(100);
   ok('扫码优先命中内置新西兰条码包');
+
+  const auItem = window.AU_PACK.items[0];
+  doc.querySelector('#view [data-act=open-add]').click();
+  await sleep(150);
+  doc.querySelector('.seg-tabs [data-tab="scan"]').click();
+  await sleep(150);
+  const barcodeForm3 = doc.querySelector('form[data-form="barcode"]');
+  barcodeForm3.querySelector('[name="code"]').value = auItem[0];
+  submit(window, barcodeForm3);
+  const auName = await waitFor(() => doc.querySelector('#sheet .portion-name'), 3000);
+  assert.strictEqual(text(auName), auItem[1]);
+  doc.querySelector('[data-act="close-sheet"]').click();
+  await sleep(100);
+  ok('扫码优先命中内置澳大利亚条码包');
 
   // ---------- 首次使用：引导页 ----------
   const dom2 = await JSDOM.fromURL('http://127.0.0.1:8123/?nosw=1', {

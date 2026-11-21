@@ -99,18 +99,21 @@
   - 中国常见食材 100+ 种（猪牛羊部位、河鲜、豆制品、时令蔬菜水果）
   - 新西兰常见食物 19 种（羊排、鹿肉、库马拉、斐济果、Pavlova、肉派、Marmite、Weet-Bix、Flat White…）
 
-**新西兰包装条码包：2,500 条**
+**新西兰 + 澳大利亚包装条码包：各 2,500 条，共 5,000 条**
 
-- 文件：`js/packs/nz.js`（约 191 KB）
-- 来源：Open Food Facts 官方 CSV dump 中 `countries_tags` 含 `en:new-zealand` 的商品
+- 文件：`js/packs/nz.js`、`js/packs/au.js`（各约 191 KB）
+- 来源：Open Food Facts 官方 CSV dump 中 `countries_tags` 含 `en:new-zealand` / `en:australia` 的商品
 - 筛选：条码 8–14 位、热量与三大营养素齐全、宏量总和 ≤ 100g
 - 排序：按 `unique_scans_n`（扫码热度）取前 2,500 条
-- 结果：匹配到 13,254 条新西兰商品，选前 2,500 条；包含本地品牌和在新西兰销售的进口商品
+- 结果：新西兰匹配 13,254 条、澳大利亚匹配 67,452 条，各选前 2,500 条；包含本地品牌和在当地超市销售的进口商品
 - 重新生成：
 
 ```powershell
 python tools/build_pack.py --csv <OFF CSV dump> --country new-zealand \
   --out js/packs/nz.js --var NZ_PACK --title "新西兰包装食品" --limit 2500
+
+python tools/build_pack.py --csv <OFF CSV dump> --country australia \
+  --out js/packs/au.js --var AU_PACK --title "澳大利亚包装食品" --limit 2500
 ```
 
 署名（ODbL 要求）：
@@ -120,8 +123,12 @@ python tools/build_pack.py --csv <OFF CSV dump> --country new-zealand \
 ## 下一步（待定）
 
 - [x] 新西兰精选条码包（2,500 条）
+- [x] 澳大利亚精选条码包（2,500 条）
 - [x] 通用食物库 83 → 286
 - [ ] 中国条码包（OFF 只有 1.8k 条，覆盖率有限，待定）
-- [ ] 定期更新新西兰包（比如每季度用最新 dump 重新生成）
+- [ ] 定期更新新西兰/澳大利亚包（比如每季度用最新 dump 重新生成）
 - [ ] 中国条码：如果 OFF 覆盖不够，是否接受接一个按次计费的国内条码 API（约 0.01–0.05 元/次）？
 - [x] 用户食物库导出 / 导入（条码包）
+- [x] 手动录入支持 per 100g / per serve
+- [x] AI 拍照一次识别多份食物、可选存入食物库
+- [x] AI 照片中检测条码并转商品查询
